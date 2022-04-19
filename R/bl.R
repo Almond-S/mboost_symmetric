@@ -205,8 +205,10 @@ hyper_bbs <- function(mf, vary, knots = 20, boundary.knots = NULL, degree = 3,
         ret[[n]] <- knotf(mf[[n]], if (is.list(knots)) knots[[n]] else knots,
                           if (is.list(boundary.knots)) boundary.knots[[n]]
                           else boundary.knots)
-    if (cyclic & constraint != "none")
-        stop("constraints not implemented for cyclic B-splines")
+    if (cyclic & constraint %in% c("increasing", "decreasing"))
+        stop("Monotonicity constraints not implemented for cyclic B-splines")
+    if (!cyclic & constraint %in% c("symmetric", "antisymmetric"))
+        stop("Sorry, (anti-)symmetry constraints only implemented for 'cyclic = TRUE'.")
     stopifnot(is.numeric(deriv) & length(deriv) == 1)
     ## prediction is usually set in/by newX()
     list(knots = ret, degree = degree, differences = differences,
@@ -231,6 +233,7 @@ X_bbs <- function(mf, vary, args) {
                      knots = args$knots[[i]]$knots,
                      boundary.knots = args$knots[[i]]$boundary.knots,
                      degree = args$degree,
+                     Ts_constraint = args$Ts_constraint,
                      deriv = args$deriv)
         }
         class(X) <- "matrix"
@@ -249,6 +252,9 @@ X_bbs <- function(mf, vary, args) {
     }
     if (length(mm) == 1) {
         X <- mm[[1]]
+        bs.dim <- if(is.null(attr(X, "Ts_constraint"))) 
+            ncol(X) else 
+                nrow(attr(X, "D"))
         if (vary != "") {
             by <- model.matrix(as.formula(paste("~", vary, collapse = "")),
                                data = mf)[ , -1, drop = FALSE] # drop intercept
@@ -261,21 +267,21 @@ X_bbs <- function(mf, vary, args) {
         }
         if (args$differences > 0){
             if (!args$cyclic) {
-                K <- diff(diag(ncol(mm[[1]])), differences = args$differences)
+                K <- diff(diag(bs.dim), differences = args$differences)
             } else {
                 ## cyclic P-splines
                 differences <- args$differences
-                K <- diff(diag(ncol(mm[[1]]) + differences),
+                K <- diff(diag(bs.dim + differences),
                           differences = differences)
                 tmp <- K[,(1:differences)]   # save first "differences" columns
                 K <- K[,-(1:differences)]    # drop first "differences" columns
-                indx <- (ncol(mm[[1]]) - differences + 1):(ncol(mm[[1]]))
+                indx <- (bs.dim - differences + 1):bs.dim
                 K[,indx] <- K[,indx] + tmp   # add first "differences" columns
             }
         } else {
             if (args$differences != 0)
                 stop(sQuote("differences"), " must be an non-neative integer")
-            K <- diag(ncol(mm[[1]]))
+            K <- diag(bs.dim)
         }
 
         if (vary != "" && ncol(by) > 1){       # build block diagonal penalty
@@ -509,7 +515,7 @@ bols <- function(..., by = NULL, index = NULL, intercept = TRUE, df = NULL,
 ### P-spline (and tensor-product spline) baselearner
 bbs <- function(..., by = NULL, index = NULL, knots = 20, boundary.knots = NULL,
                 degree = 3, differences = 2, df = 4, lambda = NULL, center = FALSE,
-                cyclic = FALSE, constraint = c("none", "increasing", "decreasing"),
+                cyclic = FALSE, constraint = c("none", "symmetric", "antisymmetric", "increasing", "decreasing"),
                 deriv = 0) {
 
     if (!is.null(lambda)) df <- NULL
@@ -518,7 +524,7 @@ bbs <- function(..., by = NULL, index = NULL, knots = 20, boundary.knots = NULL,
     cll[[1]] <- as.name("bbs")
     
     constraint <- match.arg(constraint)
-    if (constraint != "none")
+    if (constraint %in% c("increasing", "decreasing"))
         warning("Using ", sQuote('bbs()'), ' with constraint != "none" is discouraged. Preferably use ', 
                 sQuote('bmono()'), " instead.\n",
                 "See section ", sQuote("Details"), " of ?bbs for more information.")
@@ -607,7 +613,8 @@ bbs <- function(..., by = NULL, index = NULL, knots = 20, boundary.knots = NULL,
 
 ### cyclic B-splines
 ### adapted version of mgcv::cSplineDes from S.N. Wood
-cbs <- function (x, knots, boundary.knots, degree = 3, deriv = 0L) {
+cbs <- function (x, knots, boundary.knots, degree = 3,
+                 Ts_constraint = "none", deriv = 0L) {
 
     if (any(x < boundary.knots[1], na.rm = TRUE) |
         any(x > boundary.knots[2], na.rm = TRUE))
@@ -622,6 +629,10 @@ cbs <- function (x, knots, boundary.knots, degree = 3, deriv = 0L) {
         x <- x[!nax]
 
     knots <- c(boundary.knots[1], knots, boundary.knots[2])
+    if(Ts_constraint %in% c("symmetric", "antisymmetric") & 
+       all.equal(-rev(knots - mean(boundary.knots)), knots - mean(boundary.knots)) != TRUE)
+        stop("For (anti-)symmetric splines, the knots have to be symmetric.")
+        
     nKnots <- length(knots)
     ord <- degree + 1
     xc <- knots[nKnots - ord + 1]
@@ -642,14 +653,42 @@ cbs <- function (x, knots, boundary.knots, degree = 3, deriv = 0L) {
         tmp[!nax, ] <- X
         X <- tmp
     }
+    ### constraints; experimental
+    if (Ts_constraint == "symmetric") { 
+        get_D <- function(k) {
+            k2 <- ceiling(k/2)
+            D <- rbind( diag(nrow = k2),
+                        diag(nrow = k2)[,rev(seq_len(k2))] )
+            if (k %% 2) D <- D[-k2, ]
+            D
+        }
+        D <- Matrix::bdiag(get_D(degree), get_D(ncol(X)-degree))
+    }
+    if (Ts_constraint == "antisymmetric") {
+        get_D <- function(k) {
+            k2 <- floor(k/2)
+            D <- rbind( diag(nrow = k2),
+                        if (k %% 2) 0,
+                        - diag(nrow = k2)[,rev(seq_len(k2))] )
+            D
+        }
+        D <- Matrix::bdiag(get_D(degree), get_D(ncol(X)-degree))
+    }
+    X <- switch(Ts_constraint, "none" = X,
+                "symmetric" = X %*% D,
+                "antisymmetric" = X %*% D)
     ## add attributes
     attr(X, "degree") <- degree
     attr(X,"knots") <- knots
     attr(X,"boundary.knots") <- boundary.knots
+    if (Ts_constraint != "none")
+        attr(X, "Ts_constraint") <- Ts_constraint
+    if (Ts_constraint != "none")
+        attr(X, "D") <- D
     if (length(deriv) > 1 || deriv != 0)
         attr(X, "deriv") <- deriv
     dimnames(X) <- list(nx, 1L:ncol(X))
-    return(X)
+    return(as.matrix(X))
 }
 
 bsplines <- function(x, knots, boundary.knots, degree,
@@ -773,11 +812,13 @@ bl_lin <- function(blg, Xfun, args) {
         if (is(X, "Matrix") && !extends(class(XtX), "dgeMatrix")) {
             XtXC <- Cholesky(forceSymmetric(XtX))
             mysolve <- function(y) {
-                if (is.null(attr(X, "Ts_constraint")))
-                    return(solve(XtXC, crossprod(X, y)))  ## special solve routine from
+                if (!is.null(attr(X, "Ts_constraint"))) {
+                    if (attr(X, "Ts_constraint") %in% c("increasing", "decreasing"))
+                        ### non-negative LS only at the moment
+                        return(nnls1D(as(XtX, "matrix"), as(X, "matrix"), y))
+                }
+                solve(XtXC, crossprod(X, y))  ## special solve routine from
                                                           ## package Matrix
-                ### non-negative LS only at the moment
-                return(nnls1D(as(XtX, "matrix"), as(X, "matrix"), y))
             }
         } else {
             if (is(X, "Matrix")) {
@@ -786,10 +827,12 @@ bl_lin <- function(blg, Xfun, args) {
                 XtX <- as(XtX, "matrix")
             }
             mysolve <- function(y) {
-                if (is.null(attr(X, "Ts_constraint")))
-                    return(solve(XtX, crossprod(X, y)))
-                ### non-negative LS only at the moment
-                return(nnls1D(XtX, X, y))
+                if (!is.null(attr(X, "Ts_constraint"))) {
+                    if (attr(X, "Ts_constraint") %in% c("increasing", "decreasing"))
+                        ### non-negative LS only at the moment
+                        return(nnls1D(as(XtX, "matrix"), as(X, "matrix"), y))
+                }
+                solve(XtX, crossprod(X, y))
             }
         }
 
