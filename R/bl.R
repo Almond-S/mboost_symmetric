@@ -878,7 +878,7 @@ bl_lin <- function(blg, Xfun, args) {
                 cf <- matrix(cf, nrow = 1)
             if(!is.null(newdata)) {
                 index <- NULL
-                ## Use sparse data represenation if data set is huge
+                ## Use sparse data representation if data set is huge
                 ## and a data.frame
                 if (is.data.frame(newdata) && nrow(newdata) > options("mboost_indexmin")[[1]]) {
                     index <- get_index(newdata)
