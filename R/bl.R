@@ -264,6 +264,8 @@ X_bbs <- function(mf, vary, args) {
                 ret
             })
             X <- do.call("cbind", DM)
+            attr(X, "Ts_constraint") <- attr(DM[[1]], "Ts_constraint")
+            attr(X, "D") <- attr(DM[[1]], "D")
         }
         if (args$differences > 0){
             if (!args$cyclic) {
@@ -282,6 +284,11 @@ X_bbs <- function(mf, vary, args) {
             if (args$differences != 0)
                 stop(sQuote("differences"), " must be an non-neative integer")
             K <- diag(bs.dim)
+        }
+        
+        if (!is.null(attr(X, "Ts_constraint"))) {
+            D <- attr(X, "D")
+            K <- K %*% D
         }
 
         if (vary != "" && ncol(by) > 1){       # build block diagonal penalty
@@ -308,10 +315,6 @@ X_bbs <- function(mf, vary, args) {
             K <- diag(ncol(X))
         } else {
             K <- crossprod(K)
-        }
-        if (!is.null(attr(X, "Ts_constraint"))) {
-            D <- attr(X, "D")
-            K <- crossprod(D, K) %*% D
         }
     }
     if (length(mm) == 2) {
@@ -677,6 +680,7 @@ cbs <- function (x, knots, boundary.knots, degree = 3,
     X <- switch(Ts_constraint, "none" = X,
                 "symmetric" = X %*% D,
                 "antisymmetric" = X %*% D)
+    X <- as.matrix(X)
     ## add attributes
     attr(X, "degree") <- degree
     attr(X,"knots") <- knots
@@ -688,7 +692,7 @@ cbs <- function (x, knots, boundary.knots, degree = 3,
     if (length(deriv) > 1 || deriv != 0)
         attr(X, "deriv") <- deriv
     dimnames(X) <- list(nx, 1L:ncol(X))
-    return(as.matrix(X))
+    return(X)
 }
 
 bsplines <- function(x, knots, boundary.knots, degree,

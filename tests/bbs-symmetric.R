@@ -65,14 +65,13 @@ d2 <- data.frame(
   t = rep(d$t, 2), 
   dim = factor(rep(c("x", "y"), each = length(d$t))),
   value = c(d$x, d$y))
-contrasts(d2$dim, 2) <- contrasts(d2$dim, contrasts = FALSE)
 d2$dim_x <- d2$dim_y <- d2$dim
 contrasts(d2$dim_x) <- contrasts(d2$dim, contrasts = FALSE)[,"x",drop = FALSE]
 contrasts(d2$dim_y) <- contrasts(d2$dim, contrasts = FALSE)[,"y",drop = FALSE]
+contrasts(d2$dim, 2) <- contrasts(d2$dim, contrasts = FALSE)
 
-fam <- Gaussian()
 mod2 <- mboost(value ~ bbs(t, by = dim, boundary.knots = c(0,1), cyclic = TRUE, df = 20), 
-               data = d2, family = fam)
+               data = d2)
 newdat <- data.frame(t = rep(t_grid, 2), dim = factor(rep(c("x", "y"), each = length(t_grid))))
 contrasts(newdat$dim, 2) <- contrasts(newdat$dim, contrasts = FALSE)
 pred2 <- predict(mod2, newdata = newdat)
@@ -80,33 +79,39 @@ lines(head(pred2, length(t_grid)), tail(pred2, length(t_grid)), col ="darkseagre
 
 
 ctr <- contrasts(d2$dim, FALSE)
-mod3 <- mboost(value ~ bbs(t, by = dim, boundary.knots = c(0,1), cyclic = TRUE, df = 10, contrasts.arg = ctr[, "x", drop = F]) %+% 
-                 bbs(t, by = dim, boundary.knots = c(0,1), cyclic = TRUE, df = 10, contrasts.arg = ctr[, "y", drop = F]),
+mod3 <- mboost(value ~ bbs(t, by = dim_y, #knots = 3,
+                           boundary.knots = c(0,1), df = 1,
+                           constraint = "symmetric",
+                           cyclic = TRUE) + 
+                 bbs(t, by = dim_x, boundary.knots = c(0,1), df = 1, 
+                     constraint = "antisymmetric",  #knots = 3,
+                     cyclic = TRUE
+                     ), offset = TRUE,
                data = d2)
-# newdat$dim_x <- newdat$dim_y <- newdat$dim
 pred3 <- predict(mod3)#, newdata = newdat)
 plot(head(pred3, nrow(d)), tail(pred3, nrow(d)), lty = "dotted", col ="darkred", t = "b")
+plot(pred3, t = "l")
 
+newdat$dim_x <- newdat$dim_y <- factor(newdat$dim)
+contrasts(newdat$dim_x) <- contrasts(newdat$dim_x, FALSE)[, "x", drop = F]
 pred3 <- predict(mod3, newdata = newdat)
 plot(head(pred3, length(t_grid)), tail(pred3, length(t_grid)), col ="darkred", t = "l")
 
-
-# check contrast.arg ------------------------------------------------------
-
-d$fac <- factor(rep(c("a", "b"), c(3, nrow(d)-3)), levels = c("a", "b", "c"))
-d$ctr_a <- as.numeric(d$fac == "a")
-d$ctr_b <- as.numeric(d$fac == "b")
-
-
-ctr <- with(d, cbind(ctr_a, ctr_b))
-
-m0 <- mboost(y ~ bbs(x, by = fac, diff = 0), data = d)
-plot(m0)
-nd0 <- data.frame(
-  x = seq(min(d$t), max(d$t), len = 100), 
-  fac = factor(rep(c("a", "b"), each = 50)),
-  ctr_a = rep(c(1,0), each = 50))
-nd0$y <- predict(m0, newdata = nd0)
-
-plot(nd0[, c("x", "y")], t = "l")
-abline(v = mean(nd0$x[50:51]), col = "grey")
+d3 <- data.frame(
+  t = rep(t_grid, 2), 
+  value = c(draw(t_grid)) + rnorm(t_grid, sd = .01),
+  dim = factor(rep(c("x", "y"), each = length(t_grid))))
+d3$dim_x <- d3$dim_y <- d3$dim
+d3$s <- d3$t
+contrasts(d3$dim_x) <- contrasts(d3$dim, F)[, "x", drop = F]
+mod4 <- mboost(value ~ bbs(t, by = dim_x, 
+                           boundary.knots = c(0,1), df = 10, 
+                           cyclic = TRUE,
+                           constraint = "antisymmetric") %+% 
+                 bbs(t, by = dim_y, 
+                           boundary.knots = c(0,1), df = 10, 
+                           cyclic = TRUE,
+                           constraint = "symmetric"), offset = 0, data = d3)#[seq_along(t_grid), ])
+d3$pred <- predict(mod4)
+lines(d3$pred[d3$dim == "x"], d3$pred[d3$dim == "y"], t = "l")
+plot(d3$pred[d3$dim == "x"], t = "l")
